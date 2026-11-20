@@ -157,7 +157,7 @@ For a fresh computer, clone this repository and run `setup` again. Download and 
 bash tests/test_cli.sh
 ```
 
-Tests cover Bash syntax, command validation, help text, layer metadata and compilation/execution of the standalone C++ example. GitHub Actions runs them on every push and pull request. A full image build is intentionally not part of CI because it needs substantially more disk, RAM, network traffic and time than a lightweight runner.
+Tests cover Bash syntax, command validation, help text, layer metadata and compilation/execution of the standalone C++ example. GitHub Actions runs them on every push and pull request. A separate container job builds the Docker image, checks installed tools, clones the upstream Yocto repositories and verifies that BitBake can parse the metadata. A full Linux image build is intentionally not part of CI because it needs substantially more disk, RAM, network traffic and time than a lightweight runner.
 
 Contributions are welcome through pull requests. Please use descriptive commit messages, keep scripts idempotent, avoid destructive cleanup, and document any change in the supported Yocto release.
 
