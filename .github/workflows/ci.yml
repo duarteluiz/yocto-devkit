@@ -17,3 +17,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck g++
       - name: Run tests
         run: bash tests/test_cli.sh
+
+
+  container-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build development container
+        run: |
+          docker build -t yocto-devkit:smoke \
+            --build-arg "HOST_UID=$(id -u)" \
+            --build-arg "HOST_GID=$(id -g)" \
+            -f docker/Dockerfile .
+      - name: Validate toolchain and user mapping
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            yocto-devkit:smoke bash -c '
+              set -eu
+              getent passwd "$(id -u)"
+              git --version
+              g++ --version
+              python3 -c "import git, jinja2, pexpect, websockets"
+              locale -a | grep -i en_US.utf8
+              bash /opt/devkit/container-init.sh help
+            '
