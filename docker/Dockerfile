@@ -10,7 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     file gawk gcc git iputils-ping libacl1 libcrypt-dev locales \
     python3 python3-git python3-jinja2 python3-pexpect python3-pip \
     python3-subunit python3-websockets socat texinfo unzip wget \
-    xz-utils zstd lz4 curl openssh-client cmake ninja-build \
+    xz-utils zstd lz4 curl openssh-client cmake ninja-build pkg-config \
+    catch2 libfmt-dev libspdlog-dev libboost-dev nlohmann-json3-dev \
+    libssl-dev zlib1g-dev libsqlite3-dev \
+    gdb gdbserver binutils elfutils valgrind strace ltrace \
+    clang clangd clang-format clang-tidy cppcheck ccache lcov \
     && sed -i 's/^# *\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*

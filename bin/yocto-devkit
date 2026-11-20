@@ -5,7 +5,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
 readonly WORKSPACE="${YOCTO_DEVKIT_WORKSPACE:-$HOME/yocto-devkit-workspace}"
-readonly IMAGE="${YOCTO_DEVKIT_IMAGE:-yocto-devkit:ubuntu24-yocto6}"
+readonly IMAGE="${YOCTO_DEVKIT_IMAGE:-yocto-devkit:ubuntu24-yocto6-cpp}"
 readonly SCRIPT_NAME="${0##*/}"
 
 DOCKER=()
@@ -37,6 +37,8 @@ Commands:
   build [image]                      Build a Yocto image (default: core-image-minimal)
   run [image]                        Run QEMU in a terminal (default: core-image-minimal)
   shell                              Open an interactive Yocto-enabled container shell
+  cpp-test                           Build and run native Catch2/fmt/spdlog tests
+  debug enable|disable|status        Manage QEMU-only debug tools and symbols
   bitbake <args...>                  Forward arguments to BitBake
   logs                               Show the newest setup log path
   help                               Show this help
@@ -192,7 +194,7 @@ setup() {
   progress 20 'Workspace and resources checked'
   resolve_docker
   progress 35 'Docker engine available'
-  if ! image_exists; then build_container; else log 'Docker image already exists: skipping rebuild.'; fi
+  build_container  # Docker cache keeps repeat setups fast; new dependencies are not skipped.
   progress 60 'Development container ready'
   container batch fetch
   progress 80 'Upstream Yocto repositories ready'
@@ -242,6 +244,15 @@ main() {
         [[ -t 0 && -t 1 ]] || die 'QEMU requires an interactive terminal.'
         container qemu run "$target"
       else container batch build "$target"; fi
+      ;;
+    cpp-test)
+      (( $# == 0 )) || die 'Usage: cpp-test'
+      require_ready; container batch cpp-test
+      ;;
+    debug)
+      (( $# == 1 )) || die 'Usage: debug enable|disable|status'
+      case "$1" in enable|disable|status) ;; *) die 'Usage: debug enable|disable|status' ;; esac
+      require_ready; container batch debug "$1"
       ;;
     shell)
       (( $# == 0 )) || die 'Usage: shell'

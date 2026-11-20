@@ -17,7 +17,7 @@
 | RAM | 32+ GiB recommended for comfortable Yocto work; lower-memory systems may run small builds slowly |
 | CPU | Multi-core x86-64; KVM optional |
 
-The host needs only Docker (and Git to clone this repository). All Yocto/C++ build-host dependencies are installed in the container. Setup checks available disk, RAM, CPU, Ubuntu version, Docker daemon access, and KVM support. Low-memory systems receive automatically reduced build parallelism.
+The host needs only Docker (and Git to clone this repository). All Yocto/C++ build-host dependencies are installed in the container, including Catch2 3, fmt, spdlog, GDB, Valgrind, Clang tools and static analyzers. Setup checks available disk, RAM, CPU, Ubuntu version, Docker daemon access, and KVM support. Low-memory systems receive automatically reduced build parallelism.
 
 ## Quick start
 
@@ -80,6 +80,10 @@ The installer reports stage completion with a visible percentage bar:
 | `./bin/yocto-devkit build core-image-base` | Build a named image |
 | `./bin/yocto-devkit run` | Start QEMU with `snapshot nographic slirp` and optional KVM |
 | `./bin/yocto-devkit shell` | Open a shell with the Yocto environment initialized |
+| `./bin/yocto-devkit cpp-test` | Compile and run native Catch2/fmt/spdlog integration tests |
+| `./bin/yocto-devkit debug enable` | Enable opt-in image debug symbols, headers, tools and C++ test executable |
+| `./bin/yocto-devkit debug disable` | Disable the debug profile for subsequent image builds |
+| `./bin/yocto-devkit debug status` | Inspect the debug profile |
 | `./bin/yocto-devkit bitbake -e hello-yocto` | Pass arguments directly to BitBake |
 | `./bin/yocto-devkit logs` | Print the latest setup log path |
 | `./bin/yocto-devkit help` | Print the complete command reference |
@@ -94,6 +98,32 @@ bitbake core-image-minimal
 bitbake -c cleansstate hello-yocto
 ```
 
+## C++ libraries and debugging
+
+The container installs curated **Ubuntu 24.04 packages** only, without downloading and executing unverified shell installers or using a global `pip` installation. The embedded Yocto recipes come from the `wrynose` branch of the official `meta-openembedded/meta-oe` layer.
+
+| Area | Packages | Purpose |
+| --- | --- | --- |
+| Tests | `catch2` (3.x) | Modern C++ unit tests |
+| Libraries | `libfmt-dev`, `libspdlog-dev`, `libboost-dev`, `nlohmann-json3-dev` | Formatting, structured logging, C++ utilities and JSON |
+| Systems | `libssl-dev`, `zlib1g-dev`, `libsqlite3-dev` | TLS/cryptography, compression and embedded databases |
+| Build | `cmake`, `ninja-build`, `pkg-config`, `ccache` | Repeatable compilation and build speed |
+| Debug | `gdb`, `gdbserver`, `binutils`, `elfutils`, `valgrind`, `strace`, `ltrace` | Symbols, crashes, heap defects and syscall inspection |
+| Quality | `clang`, `clangd`, `clang-format`, `clang-tidy`, `cppcheck`, `lcov` | Static analysis, code style and coverage |
+
+Use `./bin/yocto-devkit cpp-test` to build and run a Catch2 sample with fmt/spdlog through CMake and CTest. For the Yocto target, `bitbake devkit-cpp-tests` cross-compiles the same sample without requiring host development libraries to be copied into the target.
+
+The minimal image does **not** include debug symbols or debugging tools by default. Explicitly opt in when experimenting in a disposable QEMU VM:
+
+```bash
+./bin/yocto-devkit debug enable
+./bin/yocto-devkit build
+./bin/yocto-devkit run
+# In QEMU: devkit-cpp-tests
+```
+
+The debug profile enables `tools-debug`, `dbg-pkgs` and `dev-pkgs` and installs the C++ test runner. These may greatly increase image size. Return to a leaner build using `./bin/yocto-devkit debug disable` and `./bin/yocto-devkit build`. Disabling the profile does not retroactively remove files from any already-built image. See [C++ libraries and debugging](docs/CPP_DEBUGGING.md) for GDB, sanitizers, security considerations and troubleshooting.
+
 ## Architecture
 
 ```text
@@ -104,7 +134,8 @@ Ubuntu 24.04 host
       ├── sources/layers/
       │   ├── bitbake/
       │   ├── openembedded-core/
-      │   └── meta-yocto/
+      │   ├── meta-yocto/
+      │   └── meta-openembedded/     # meta-oe recipes, including Catch2
       ├── build/                 # conf/, tmp/, logs/, generated images
       ├── cache/
       │   ├── downloads/         # Download cache reused between builds
@@ -116,9 +147,9 @@ Git repository layers/meta-devkit/   # Read-only bind mount inside the container
   └── hello-yocto                 # Custom BitBake recipe and C++ source
 ```
 
-The Yocto 6.0 setup uses **three separate upstream Git repositories**, rather than relying on older Poky monorepo instructions: BitBake, OpenEmbedded-Core and `meta-yocto`, each on the `yocto-6.0` maintenance branch. Existing clones are never silently updated, which preserves a working configuration. Their Git commit IDs can be inspected in each checkout for reproducibility.
+The Yocto 6.0 setup uses **four upstream Git repositories**, rather than relying on older Poky monorepo instructions: BitBake, OpenEmbedded-Core and `meta-yocto` on `yocto-6.0`, plus `meta-openembedded` on its `wrynose` branch. Existing clones are never silently updated, which preserves a working configuration. Their Git commit IDs can be inspected in each checkout for reproducibility.
 
-The included `meta-devkit` layer is mounted read-only at `/opt/devkit/meta-devkit`. To edit a recipe, edit the files in your source checkout and rebuild. The generated `local.conf` references the cache directories, selects `qemux86-64` and enables the `hello-yocto` example.
+The included `meta-devkit` layer is mounted read-only at `/opt/devkit/meta-devkit`. To edit a recipe, edit the files in your source checkout and rebuild. The generated `local.conf` references the cache directories, selects `qemux86-64` and enables the `hello-yocto` example. `meta-oe` is also registered so that embedded Catch2, fmt and spdlog recipes are available.
 
 ## Configuration and portability
 
@@ -145,6 +176,7 @@ For a fresh computer, clone this repository and run `setup` again. Download and 
 
 ## Documentation
 
+- [C++ libraries and debugging](docs/CPP_DEBUGGING.md)
 - [Architecture and design choices](docs/ARCHITECTURE.md)
 - [Troubleshooting and recovery](docs/TROUBLESHOOTING.md)
 - [Yocto Project 6.0 quick start](https://docs.yoctoproject.org/6.0/brief-yoctoprojectqs/index.html)
@@ -157,7 +189,7 @@ For a fresh computer, clone this repository and run `setup` again. Download and 
 bash tests/test_cli.sh
 ```
 
-Tests cover Bash syntax, command validation, help text, layer metadata and compilation/execution of the standalone C++ example. GitHub Actions runs them on every push and pull request. A separate container job builds the Docker image, checks installed tools, clones the upstream Yocto repositories and verifies that BitBake can parse the metadata. A full Linux image build is intentionally not part of CI because it needs substantially more disk, RAM, network traffic and time than a lightweight runner.
+Tests cover Bash syntax, command validation, help text, layer metadata and compilation/execution of the standalone C++ example. GitHub Actions runs them on every push and pull request. A full image build is intentionally not part of CI because it needs substantially more disk, RAM, network traffic and time than a lightweight runner.
 
 Contributions are welcome through pull requests. Please use descriptive commit messages, keep scripts idempotent, avoid destructive cleanup, and document any change in the supported Yocto release.
 

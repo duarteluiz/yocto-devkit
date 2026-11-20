@@ -19,18 +19,18 @@ Yocto DevKit is a development **environment bootstrap**, not a Yocto fork or a B
 1. Check exact host distribution and architecture.
 2. Create a persistent, bind-mounted workspace and assess free disk/memory.
 3. Resolve usable Docker access; install Ubuntu `docker.io` only with explicit permission.
-4. Build the Ubuntu 24.04 development image (or reuse an existing one).
-5. Clone three Yocto 6.0 component repositories into the workspace.
+4. Build or refresh the Ubuntu 24.04 development image using Docker cache.
+5. Clone four repositories into the workspace: BitBake, OE-Core, meta-yocto and meta-openembedded.
 6. Initialize the build shell with `openembedded-core/oe-init-build-env`.
-7. Add the Poky distro layer and the custom DevKit layer.
+7. Add the Poky distro layer, meta-oe and the custom DevKit layer.
 8. Append managed `local.conf` configuration and verify BitBake.
 9. On demand, build `core-image-minimal` and boot using `runqemu`.
 
 ## Idempotency
 
-Existing valid clones remain checked out at their current commits. Existing generated `local.conf` and `bblayers.conf` are preserved, with only missing layer entries added. The managed configuration block is appended once. The installer uses a dedicated clone staging directory and retries transient failures. It does not automatically upgrade upstream Git repositories or remove Yocto caches.
+Existing valid clones remain checked out at their current commits. Existing generated `local.conf` and `bblayers.conf` are preserved, with only missing layer entries added. The managed configuration block is appended once; an independent debug block allows opt-in symbol and tool installation. The installer uses a dedicated clone staging directory and retries transient failures. It does not automatically upgrade upstream Git repositories or remove Yocto caches.
 
-For exact repeatability, pin the SHA of **each** of the three upstream repositories, plus the Docker image digest and the DevKit revision, in your own release process. The starter clones moving `yocto-6.0` branches only on the first setup.
+For exact repeatability, pin the SHA of **each** of the four upstream repositories, plus the Docker image digest and the DevKit revision, in your own release process. The starter clones moving `yocto-6.0` branches only on the first setup.
 
 ## Docker and QEMU
 
@@ -45,4 +45,4 @@ QEMU uses `snapshot`, `nographic` and `slirp`: guest changes are disposable, con
 - A full Yocto build is not feasible in the lightweight CI job.
 - Automated fallback to a completely different upstream release is intentionally avoided: such a fallback could silently mix incompatible layers.
 - Docker engine installation may require a working Ubuntu apt mirror and administrative privileges.
-- The example image contains intentionally insecure login settings for experimentation.
+- The example image contains intentionally insecure login settings for experimentation. The optional debug profile additionally adds debug tools/symbols and a C++ test runner, which must not be included in a production image.

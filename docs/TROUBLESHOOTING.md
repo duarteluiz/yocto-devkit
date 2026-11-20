@@ -23,7 +23,7 @@ If apt cannot locate `docker.io`, verify that Ubuntu package sources are enabled
 
 ## Downloads fail or Git clone is interrupted
 
-Check DNS, HTTPS access, proxy settings and disk space. The container retries a failed clone three times. You can re-run:
+Check DNS, HTTPS access, proxy settings and disk space. The container retries each upstream and mirror clone twice (up to four attempts per repository). You can re-run:
 
 ```bash
 ./bin/yocto-devkit setup
@@ -87,3 +87,26 @@ Do not delete the workspace unless you intend to lose local downloads, build his
 ```
 
 To recover from a package-specific error, prefer cleaning only that recipe. To save space, inspect the exact paths before manually removing temporary build outputs; there is intentionally no automatic destructive reset command.
+
+## Catch2 or fmt/spdlog recipe is unavailable
+
+Run setup again to fetch `meta-openembedded` and register `meta-oe`:
+
+```bash
+./bin/yocto-devkit setup
+./bin/yocto-devkit shell
+bitbake-layers show-layers
+bitbake-layers show-recipes catch2 fmt spdlog devkit-cpp-tests
+```
+
+The `meta-openembedded` checkout uses branch `wrynose` and is preserved between setups. Do not mix incompatible branches.
+
+## CMake cannot locate Catch2 or the sample test fails
+
+Re-run setup to rebuild the Docker image with the updated libraries, then:
+
+```bash
+./bin/yocto-devkit cpp-test
+```
+
+The container uses Ubuntu's signed apt packages. Do not fix this by globally installing random packages through `pip`, `curl | sh`, or unverified PPAs. Read [C++ debugging](CPP_DEBUGGING.md) for optional sanitizers and symbols.

@@ -12,7 +12,7 @@ info() { printf '[container] %s\n' "$*"; }
 fail() { printf '[container] ERROR: %s\n' "$*" >&2; exit 1; }
 
 clone_repo() {
-  local name=$1 primary=$2 mirror=$3 dest="$LAYERS/$1" stage attempt url
+  local name=$1 primary=$2 mirror=$3 branch=${4:-$BRANCH} dest="$LAYERS/$1" stage attempt url
   if [[ -d "$dest/.git" ]]; then
     info "$name already exists; preserving its checked-out revision."
     return 0
@@ -23,7 +23,7 @@ clone_repo() {
     for attempt in 1 2; do
       rm -rf -- "$stage"  # Only our known, generated staging directory.
       if GIT_TERMINAL_PROMPT=0 timeout 240 git -c http.version=HTTP/1.1 \
-        clone --depth 1 --branch "$BRANCH" "$url" "$stage"; then
+        clone --depth 1 --branch "$branch" "$url" "$stage"; then
         mv -- "$stage" "$dest"
         git -C "$dest" rev-parse HEAD
         return 0
@@ -40,6 +40,7 @@ fetch_sources() {
   clone_repo bitbake https://git.openembedded.org/bitbake https://github.com/openembedded/bitbake.git
   clone_repo openembedded-core https://git.openembedded.org/openembedded-core https://github.com/openembedded/openembedded-core.git
   clone_repo meta-yocto https://git.yoctoproject.org/meta-yocto https://github.com/yoctoproject/meta-yocto.git
+  clone_repo meta-openembedded https://git.openembedded.org/meta-openembedded https://github.com/openembedded/meta-openembedded.git wrynose
   info 'All source repositories are available.'
 }
 
@@ -87,17 +88,74 @@ CONFIG
 
 configure() {
   activate
-  local meta_poky="$LAYERS/meta-yocto/meta-poky"
+  local meta_poky="$LAYERS/meta-yocto/meta-poky" meta_oe="$LAYERS/meta-openembedded/meta-oe"
   [[ -f "$meta_poky/conf/layer.conf" ]] || fail 'meta-poky layer is missing.'
   [[ -f /opt/devkit/meta-devkit/conf/layer.conf ]] || fail 'DevKit example layer not mounted.'
+  [[ -f "$meta_oe/conf/layer.conf" ]] || fail 'meta-oe layer is missing.'
   if ! grep -Fq "$meta_poky" "$BUILD/conf/bblayers.conf"; then
     bitbake-layers add-layer "$meta_poky"
+  fi
+  if ! grep -Fq "$meta_oe" "$BUILD/conf/bblayers.conf"; then
+    bitbake-layers add-layer "$meta_oe"
   fi
   if ! grep -Fq '/opt/devkit/meta-devkit' "$BUILD/conf/bblayers.conf"; then
     bitbake-layers add-layer /opt/devkit/meta-devkit
   fi
   append_managed_config
+  ensure_debug_block
   info 'Yocto configuration ready.'
+}
+
+
+# The optional image-debug block is managed independently of the initial settings.
+# Never rewrite user-owned configuration when switching the debug profile.
+ensure_debug_block() {
+  local conf="$BUILD/conf/local.conf"
+  [[ -f "$conf" ]] || fail "Missing $conf"
+  if ! grep -qx '# BEGIN YOCTO-DEVKIT-DEBUG' "$conf"; then
+    cat >> "$conf" <<'CONFIG'
+
+# BEGIN YOCTO-DEVKIT-DEBUG (opt-in QEMU development image only)
+# EXTRA_IMAGE_FEATURES:append = " tools-debug dbg-pkgs dev-pkgs"
+# IMAGE_INSTALL:append = " devkit-cpp-tests"
+# END YOCTO-DEVKIT-DEBUG
+CONFIG
+  fi
+}
+
+debug_profile() {
+  local action=${1:-status} conf="$BUILD/conf/local.conf"
+  ensure_debug_block
+  case "$action" in
+    enable)
+      sed -i '/^# BEGIN YOCTO-DEVKIT-DEBUG$/,/^# END YOCTO-DEVKIT-DEBUG$/ {
+        s/^# EXTRA_IMAGE_FEATURES:append = " tools-debug dbg-pkgs dev-pkgs"$/EXTRA_IMAGE_FEATURES:append = " tools-debug dbg-pkgs dev-pkgs"/
+        s/^# IMAGE_INSTALL:append = " devkit-cpp-tests"$/IMAGE_INSTALL:append = " devkit-cpp-tests"/
+      }' "$conf"
+      info 'Debug profile enabled. Rebuild the image before starting QEMU.' ;;
+    disable)
+      sed -i '/^# BEGIN YOCTO-DEVKIT-DEBUG$/,/^# END YOCTO-DEVKIT-DEBUG$/ {
+        s/^EXTRA_IMAGE_FEATURES:append = " tools-debug dbg-pkgs dev-pkgs"$/# EXTRA_IMAGE_FEATURES:append = " tools-debug dbg-pkgs dev-pkgs"/
+        s/^IMAGE_INSTALL:append = " devkit-cpp-tests"$/# IMAGE_INSTALL:append = " devkit-cpp-tests"/
+      }' "$conf"
+      info 'Debug profile disabled. Rebuild for a leaner image.' ;;
+    status) ;;
+    *) fail 'Expected debug enable, disable or status.' ;;
+  esac
+  if sed -n '/^# BEGIN YOCTO-DEVKIT-DEBUG$/,/^# END YOCTO-DEVKIT-DEBUG$/p' "$conf" | \
+      grep -qx 'EXTRA_IMAGE_FEATURES:append = " tools-debug dbg-pkgs dev-pkgs"'; then
+    info 'Debug profile: enabled'
+  else
+    info 'Debug profile: disabled'
+  fi
+}
+
+cpp_test() {
+  local src=/opt/devkit/meta-devkit/recipes-test/devkit-cpp-tests/files
+  local dest=/workspace/cpp-build
+  cmake -S "$src" -B "$dest" -G Ninja -DCMAKE_BUILD_TYPE=Debug
+  cmake --build "$dest" --parallel 2
+  ctest --test-dir "$dest" --output-on-failure
 }
 
 verify() {
@@ -105,6 +163,7 @@ verify() {
   command -v bitbake >/dev/null || fail 'BitBake not found in PATH.'
   bitbake --version
   bitbake-layers show-layers
+  bitbake-layers show-recipes catch2 fmt spdlog devkit-cpp-tests
   bitbake -p
   [[ -s "$BUILD/conf/bblayers.conf" ]] || fail 'bblayers.conf was not generated.'
   [[ -s "$BUILD/conf/local.conf" ]] || fail 'local.conf was not generated.'
@@ -127,8 +186,10 @@ main() {
       exec runqemu "${options[@]}"
       ;;
     shell) activate; exec bash --noprofile --norc -i ;;
+    cpp-test) cpp_test ;;
+    debug) debug_profile "${1:-status}" ;;
     bitbake) activate; bitbake "$@" ;;
-    help) printf 'Supported commands: fetch configure verify build run shell bitbake\n' ;;
+    help) printf 'Supported commands: fetch configure verify build run shell bitbake cpp-test debug\n' ;;
     *) fail "Unknown container action: $action" ;;
   esac
 }
