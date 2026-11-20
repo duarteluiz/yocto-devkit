@@ -194,7 +194,9 @@ container() {
     --mount "type=bind,source=$WORKSPACE,target=/workspace" \
     --mount "type=bind,source=$ROOT_DIR/layers/meta-devkit,target=/opt/devkit/meta-devkit,readonly" \
     --security-opt no-new-privileges --cap-drop ALL)
-  if [[ "$mode" == interactive ]]; then args+=(-it); fi
+  # Both the interactive shell and QEMU serial console need an attached stdin
+  # and a pseudo-TTY; without -it the guest boots but login cannot receive input.
+  if [[ "$mode" == interactive || "$mode" == qemu ]]; then args+=(-it); fi
   if [[ "$mode" == qemu && -r /dev/kvm && -w /dev/kvm ]]; then
     args+=(--device /dev/kvm --group-add "$(stat -c %g /dev/kvm)")
     log 'KVM acceleration enabled.'

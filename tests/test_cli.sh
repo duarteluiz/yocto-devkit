@@ -33,6 +33,46 @@ if "$ROOT/bin/yocto-devkit" does-not-exist >"$TEMP_DIR/invalid.log" 2>&1; then
   exit 1
 fi
 
+check 'Checking QEMU stdin and terminal forwarding'
+# This regression test requires no Docker daemon or Yocto build. The mock
+# records the docker run arguments from a pseudo-terminal invocation.
+mkdir -p "$TEMP_DIR/mock-bin" "$TEMP_DIR/workspace/build/conf"
+: > "$TEMP_DIR/workspace/build/conf/local.conf"
+cat > "$TEMP_DIR/mock-bin/docker" <<'MOCK_DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  info) exit 0 ;;
+  image) [[ "${2:-}" == inspect ]] ;;
+  run) printf '%s\n' "$@" > "${MOCK_DOCKER_ARGS:?}" ;;
+  *) exit 1 ;;
+esac
+MOCK_DOCKER
+chmod +x "$TEMP_DIR/mock-bin/docker"
+if ! command -v script >/dev/null 2>&1; then
+  printf 'script(1) is required for pseudo-terminal regression tests\n' >&2
+  exit 1
+fi
+env PATH="$TEMP_DIR/mock-bin:$PATH" \
+  YOCTO_DEVKIT_WORKSPACE="$TEMP_DIR/workspace" \
+  MOCK_DOCKER_ARGS="$TEMP_DIR/docker-args" \
+  script -q -e -c "$ROOT/bin/yocto-devkit run" /dev/null >"$TEMP_DIR/qemu-run.log" 2>&1
+grep -Fxq -- '-it' "$TEMP_DIR/docker-args" || {
+  printf 'QEMU Docker invocation omitted -it\n' >&2
+  exit 1
+}
+grep -Fxq -- 'run' "$TEMP_DIR/docker-args"
+
+check 'Checking non-interactive actions do not allocate a TTY'
+env PATH="$TEMP_DIR/mock-bin:$PATH" \
+  YOCTO_DEVKIT_WORKSPACE="$TEMP_DIR/workspace" \
+  MOCK_DOCKER_ARGS="$TEMP_DIR/docker-args" \
+  "$ROOT/bin/yocto-devkit" debug status >"$TEMP_DIR/debug-status.log" 2>&1
+if grep -Fxq -- '-it' "$TEMP_DIR/docker-args"; then
+  printf 'Non-interactive Docker invocation incorrectly uses -it\n' >&2
+  exit 1
+fi
+
 check 'Checking Dockerfile and Yocto metadata'
 grep -q 'FROM ubuntu:24.04' "$ROOT/docker/Dockerfile"
 grep -q 'LAYERSERIES_COMPAT_devkit = "wrynose"' "$ROOT/layers/meta-devkit/conf/layer.conf"
