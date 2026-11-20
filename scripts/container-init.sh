@@ -105,6 +105,8 @@ verify() {
   activate
   command -v bitbake >/dev/null || fail 'BitBake not found in PATH.'
   bitbake --version
+  bitbake-layers show-layers
+  bitbake -p
   [[ -s "$BUILD/conf/bblayers.conf" ]] || fail 'bblayers.conf was not generated.'
   [[ -s "$BUILD/conf/local.conf" ]] || fail 'local.conf was not generated.'
   info 'Workspace verification passed.'
