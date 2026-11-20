@@ -2,7 +2,8 @@
 # Yocto DevKit: host-side CLI for Ubuntu 24.04.
 set -Eeuo pipefail
 
-readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+readonly ROOT_DIR
 readonly WORKSPACE="${YOCTO_DEVKIT_WORKSPACE:-$HOME/yocto-devkit-workspace}"
 readonly IMAGE="${YOCTO_DEVKIT_IMAGE:-yocto-devkit:ubuntu24-yocto6}"
 readonly SCRIPT_NAME="${0##*/}"
@@ -113,7 +114,8 @@ resolve_docker() {
 }
 
 progress() {
-  local pct=$1 label=$2 count=$((pct / 5)) bar='' i
+  local pct=$1 label=$2 bar='' i count
+  count=$((pct / 5))
   for ((i=0;i<20;i++)); do
     if (( i < count )); then bar+='='; else bar+='.'; fi
   done
@@ -219,7 +221,11 @@ doctor() {
       warn 'Docker daemon is not currently accessible without interaction.'
     fi
   else warn 'Docker is not installed.'; fi
-  [[ -f "$WORKSPACE/build/conf/local.conf" ]] && log 'Yocto configuration detected.' || warn 'Yocto workspace not initialized.'
+  if [[ -f "$WORKSPACE/build/conf/local.conf" ]]; then
+    log 'Yocto configuration detected.'
+  else
+    warn 'Yocto workspace not initialized.'
+  fi
   log 'Diagnostics complete.'
 }
 
