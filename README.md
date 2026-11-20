@@ -55,6 +55,16 @@ Hello from a C++ application built with Yocto!
 
 Use `Ctrl+C` in the host QEMU terminal to stop emulation. The `snapshot` option keeps guest disk changes temporary.
 
+## Host boot and resource safety
+
+The DevKit **does not install a bootloader, partition disks, change EFI settings, or replace the host kernel**. Yocto produces files under the workspace; QEMU boots those generated files as a guest. Docker can still affect host networking, storage and services, so review privileged operations before use.
+
+Run `./bin/yocto-devkit doctor` for informational diagnostics or `./bin/yocto-devkit safety-check` for a **failing preflight** before a build. A build is blocked below **70 GiB of free disk** or **2 GiB of currently available RAM**. These are conservative starting thresholds, **not a guarantee** against disk exhaustion during a large build. Keep substantial additional space free and monitor `df -h` during long builds.
+
+The workspace must be an absolute path, cannot contain symlinks or `..` components, cannot target protected system directories, and must be outside the Git checkout. Existing build output is not automatically deleted. Docker is started only when explicitly installed; it is **not enabled automatically at boot**. Existing Docker installations and their service settings are left unchanged.
+
+QEMU runs in a container, optionally using the host's `/dev/kvm`. No `--privileged`, host networking, or host block devices are required. The development guest has an intentionally insecure passwordless root login; never use that image on real hardware or an exposed network. For greater isolation, use a dedicated non-sensitive development host and keep Ubuntu backups.
+
 ## Setup progress
 
 The installer reports stage completion with a visible percentage bar:
@@ -76,6 +86,7 @@ The installer reports stage completion with a visible percentage bar:
 | `./bin/yocto-devkit setup` | Idempotent bootstrap; reuse existing checkouts and configuration |
 | `./bin/yocto-devkit setup --install-docker --yes` | Explicitly allow `apt` installation without a confirmation prompt |
 | `./bin/yocto-devkit doctor` | Inspect Ubuntu, storage, memory, Docker, KVM and workspace |
+| `./bin/yocto-devkit safety-check` | Enforce disk, memory and workspace guards before a build |
 | `./bin/yocto-devkit build` | Build `core-image-minimal` |
 | `./bin/yocto-devkit build core-image-base` | Build a named image |
 | `./bin/yocto-devkit run` | Start QEMU with `snapshot nographic slirp` and optional KVM |

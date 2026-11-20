@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly ROOT_DIR
-readonly WORKSPACE="${YOCTO_DEVKIT_WORKSPACE:-$HOME/yocto-devkit-workspace}"
+WORKSPACE="${YOCTO_DEVKIT_WORKSPACE:-$HOME/yocto-devkit-workspace}"
 readonly IMAGE="${YOCTO_DEVKIT_IMAGE:-yocto-devkit:ubuntu24-yocto6-cpp}"
 readonly SCRIPT_NAME="${0##*/}"
 
@@ -34,6 +34,7 @@ Usage: ./bin/yocto-devkit <command> [options]
 Commands:
   setup [--install-docker] [--yes]   Install/check Docker, build image, clone Yocto, configure
   doctor                             Display host, Docker, KVM and workspace diagnostics
+  safety-check                       Enforce workspace, disk and memory safety checks
   build [image]                      Build a Yocto image (default: core-image-minimal)
   run [image]                        Run QEMU in a terminal (default: core-image-minimal)
   shell                              Open an interactive Yocto-enabled container shell
@@ -64,6 +65,43 @@ require_ubuntu() {
   [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || \
     die 'This installer supports Ubuntu 24.04 LTS only.'
   (( EUID != 0 )) || die 'Run as a normal user, not root. This CLI invokes sudo only when required.'
+}
+
+validate_workspace() {
+  # Refuse dangerous locations and symlinks before creating or mounting data.
+  [[ "$WORKSPACE" = /* ]] || die 'Workspace must be an absolute path.'
+  [[ "$WORKSPACE" != / && "$WORKSPACE" != /home && "$WORKSPACE" != /root &&
+     "$WORKSPACE" != /etc && "$WORKSPACE" != /usr && "$WORKSPACE" != /var &&
+     "$WORKSPACE" != /boot && "$WORKSPACE" != /boot/efi &&
+     "$WORKSPACE" != /proc && "$WORKSPACE" != /sys && "$WORKSPACE" != /dev ]] ||
+    die 'Workspace points to a protected system directory.'
+  local part current='' remainder="${WORKSPACE#/}"
+  while [[ -n "$remainder" ]]; do
+    part="${remainder%%/*}"
+    [[ "$part" != .. && "$part" != . && -n "$part" ]] ||
+      die 'Workspace path contains an unsafe component.'
+    current+="/$part"
+    [[ ! -L "$current" ]] || die "Workspace path contains a symlink: $current"
+    [[ "$remainder" == */* ]] || break
+    remainder="${remainder#*/}"
+  done
+  [[ "$WORKSPACE" != "$ROOT_DIR" && "$WORKSPACE" != "$ROOT_DIR/"* ]] ||
+    die 'Workspace must remain outside the Git repository.'
+}
+
+disk_free_gib() {
+  df -Pk "$WORKSPACE" | awk 'NR==2 {print int($4/1024/1024)}'
+}
+
+require_build_resources() {
+  validate_workspace
+  [[ -d "$WORKSPACE" ]] || die 'Workspace missing. Run setup first.'
+  local free_gb mem_available_mb
+  free_gb="$(disk_free_gib)"
+  mem_available_mb="$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
+  log "Build preflight: ${free_gb} GiB free, ${mem_available_mb} MiB memory available."
+  (( free_gb >= 70 )) || die 'Build blocked: at least 70 GiB free is required. Free disk space or relocate the workspace.'
+  (( mem_available_mb >= 2048 )) || die 'Build blocked: less than 2 GiB memory available.'
 }
 
 resource_report() {
@@ -97,7 +135,7 @@ install_docker() {
   sudo_cmd apt-get update
   sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
   if command -v systemctl >/dev/null 2>&1; then
-    sudo_cmd systemctl enable --now docker
+    sudo_cmd systemctl start docker
   fi
 }
 
@@ -172,6 +210,7 @@ validate_image_name() {
 
 require_ready() {
   [[ -f "$WORKSPACE/build/conf/local.conf" ]] || die 'Workspace not initialized. Run setup first.'
+  validate_workspace
   resolve_docker
   image_exists || die 'Docker image missing. Run setup first.'
 }
@@ -185,6 +224,7 @@ setup() {
     esac
     shift
   done
+  validate_workspace
   start_log
   progress 0 'Starting preflight checks'
   require_ubuntu
@@ -209,6 +249,7 @@ setup() {
 doctor() {
   printf '%s\n' 'Yocto DevKit diagnostics'
   require_ubuntu
+  validate_workspace
   mkdir -p "$WORKSPACE"
   resource_report
   log "Workspace: $WORKSPACE"
@@ -236,10 +277,17 @@ main() {
   case "$command" in
     setup) setup "$@" ;;
     doctor) doctor "$@" ;;
+    safety-check)
+      (( $# == 0 )) || die 'Usage: safety-check'
+      require_ubuntu
+      require_build_resources
+      log 'Safety preflight passed. Bootloader and EFI partitions are never modified.'
+      ;;
     build|run)
       (( $# <= 1 )) || die "Usage: $SCRIPT_NAME $command [image]"
       local target=${1:-core-image-minimal}
       validate_image_name "$target"; require_ready
+      [[ "$command" == build ]] && require_build_resources
       if [[ "$command" == run ]]; then
         [[ -t 0 && -t 1 ]] || die 'QEMU requires an interactive terminal.'
         container qemu run "$target"
@@ -261,7 +309,7 @@ main() {
       ;;
     bitbake)
       (( $# > 0 )) || die 'Specify BitBake arguments.'
-      require_ready; container batch bitbake "$@"
+      require_ready; require_build_resources; container batch bitbake "$@"
       ;;
     logs)
       [[ -d "$WORKSPACE/logs" ]] || die 'No logs yet.'
