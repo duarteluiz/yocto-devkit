@@ -25,6 +25,7 @@ fi
 check 'Checking Dockerfile and Yocto metadata'
 grep -q 'FROM ubuntu:24.04' "$ROOT/docker/Dockerfile"
 grep -q 'LAYERSERIES_COMPAT_devkit = "wrynose"' "$ROOT/layers/meta-devkit/conf/layer.conf"
+# shellcheck disable=SC2016 # Matching a literal BitBake variable expression.
 grep -q 'S = "${UNPACKDIR}"' "$ROOT/layers/meta-devkit/recipes-examples/hello-yocto/hello-yocto_1.0.bb"
 
 check 'Compiling the standalone C++ sample'
