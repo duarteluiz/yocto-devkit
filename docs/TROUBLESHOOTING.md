@@ -74,6 +74,21 @@ ls "$HOME/yocto-devkit-workspace/build/tmp/deploy/images/qemux86-64"
 
 If using `YOCTO_DEVKIT_WORKSPACE`, inspect that custom location instead. The default guest image has no SSH server. Use the serial console for the demonstration.
 
+## QEMU boots but typing root does not open a shell
+
+If `qemux86-64 login: root` appears without advancing, and `Ctrl+A`
+keystrokes appear as literal `^A`, first verify that Docker attached stdin
+and allocated a terminal. The QEMU command **must** use `docker run -it`:
+otherwise the guest can display serial output but cannot accept keyboard
+input. This is a host-container terminal issue, not a failure of the Yocto
+kernel, KVM or root credentials.
+
+The DevKit CLI automatically adds `-it` for `run` and `shell`, while keeping
+non-interactive build and setup operations detached from terminal input.
+Update the repository with `git pull --ff-only origin main`, stop the existing
+QEMU instance, then use `./bin/yocto-devkit run` again. Do not rebuild the
+Yocto image for this problem.
+
 ## Login rejected in QEMU
 
 The example config appends `allow-empty-password allow-root-login empty-root-password` for a test root console. Confirm these options remain in `build/conf/local.conf`, then rebuild the image. Do not use this configuration on deployed devices.
