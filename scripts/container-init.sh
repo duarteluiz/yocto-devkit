@@ -11,16 +11,6 @@ readonly BRANCH=yocto-6.0
 info() { printf '[container] %s\n' "$*"; }
 fail() { printf '[container] ERROR: %s\n' "$*" >&2; exit 1; }
 
-retry() {
-  local tries=0
-  until "$@"; do
-    tries=$((tries + 1))
-    (( tries < 3 )) || return 1
-    info "Attempt $tries failed; retrying..."
-    sleep "$((tries * 3))"
-  done
-}
-
 clone_repo() {
   local name=$1 url=$2 dest="$LAYERS/$1" stage
   if [[ -d "$dest/.git" ]]; then
@@ -29,11 +19,19 @@ clone_repo() {
   fi
   [[ ! -e "$dest" ]] || fail "$dest exists but is not a Git checkout; refusing to overwrite it."
   stage="$LAYERS/.${name}.clone-partial"
-  rm -rf -- "$stage"  # Only our known, generated staging directory.
-  retry git -c http.version=HTTP/1.1 clone --depth 1 --branch "$BRANCH" "$url" "$stage" || \
-    fail "Could not clone $name from $url. Check proxy, DNS and network access."
-  mv -- "$stage" "$dest"
-  git -C "$dest" rev-parse HEAD
+  local attempt
+  for attempt in 1 2 3; do
+    rm -rf -- "$stage"  # Only our known, generated staging directory.
+    if git -c http.version=HTTP/1.1 clone --depth 1 --branch "$BRANCH" "$url" "$stage"; then
+      mv -- "$stage" "$dest"
+      git -C "$dest" rev-parse HEAD
+      return 0
+    fi
+    (( attempt == 3 )) && break
+    info "Clone attempt $attempt failed; retrying with a fresh staging directory."
+    sleep "$((attempt * 3))"
+  done
+  fail "Could not clone $name from $url. Check proxy, DNS and network access."
 }
 
 fetch_sources() {
