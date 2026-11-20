@@ -12,33 +12,34 @@ info() { printf '[container] %s\n' "$*"; }
 fail() { printf '[container] ERROR: %s\n' "$*" >&2; exit 1; }
 
 clone_repo() {
-  local name=$1 url=$2 dest="$LAYERS/$1" stage
+  local name=$1 primary=$2 mirror=$3 dest="$LAYERS/$1" stage attempt url
   if [[ -d "$dest/.git" ]]; then
     info "$name already exists; preserving its checked-out revision."
     return 0
   fi
   [[ ! -e "$dest" ]] || fail "$dest exists but is not a Git checkout; refusing to overwrite it."
   stage="$LAYERS/.${name}.clone-partial"
-  local attempt
-  for attempt in 1 2 3; do
-    rm -rf -- "$stage"  # Only our known, generated staging directory.
-    if git -c http.version=HTTP/1.1 clone --depth 1 --branch "$BRANCH" "$url" "$stage"; then
-      mv -- "$stage" "$dest"
-      git -C "$dest" rev-parse HEAD
-      return 0
-    fi
-    (( attempt == 3 )) && break
-    info "Clone attempt $attempt failed; retrying with a fresh staging directory."
-    sleep "$((attempt * 3))"
+  for url in "$primary" "$mirror"; do
+    for attempt in 1 2; do
+      rm -rf -- "$stage"  # Only our known, generated staging directory.
+      if GIT_TERMINAL_PROMPT=0 timeout 240 git -c http.version=HTTP/1.1 \
+        clone --depth 1 --branch "$BRANCH" "$url" "$stage"; then
+        mv -- "$stage" "$dest"
+        git -C "$dest" rev-parse HEAD
+        return 0
+      fi
+      info "Clone attempt $attempt failed for $url; trying another attempt or mirror."
+      sleep "$((attempt * 2))"
+    done
   done
-  fail "Could not clone $name from $url. Check proxy, DNS and network access."
+  fail "Could not clone $name. Check your HTTPS proxy, DNS and available disk space."
 }
 
 fetch_sources() {
   mkdir -p "$LAYERS" "$ROOT/cache/downloads" "$ROOT/cache/sstate" "$ROOT/home"
-  clone_repo bitbake https://git.openembedded.org/bitbake
-  clone_repo openembedded-core https://git.openembedded.org/openembedded-core
-  clone_repo meta-yocto https://git.yoctoproject.org/meta-yocto
+  clone_repo bitbake https://git.openembedded.org/bitbake https://github.com/openembedded/bitbake.git
+  clone_repo openembedded-core https://git.openembedded.org/openembedded-core https://github.com/openembedded/openembedded-core.git
+  clone_repo meta-yocto https://git.yoctoproject.org/meta-yocto https://github.com/yoctoproject/meta-yocto.git
   info 'All source repositories are available.'
 }
 
