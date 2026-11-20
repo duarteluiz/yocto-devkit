@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# Yocto DevKit: host-side CLI for Ubuntu 24.04.
+set -Eeuo pipefail
+
+readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+readonly WORKSPACE="${YOCTO_DEVKIT_WORKSPACE:-$HOME/yocto-devkit-workspace}"
+readonly IMAGE="${YOCTO_DEVKIT_IMAGE:-yocto-devkit:ubuntu24-yocto6}"
+readonly SCRIPT_NAME="${0##*/}"
+
+DOCKER=()
+LOG_FILE=""
+AUTO_YES=false
+ALLOW_DOCKER_INSTALL=false
+
+log() { printf '[yocto-devkit] %s\n' "$*"; }
+warn() { printf '[yocto-devkit] WARNING: %s\n' "$*" >&2; }
+die() { printf '[yocto-devkit] ERROR: %s\n' "$*" >&2; exit 1; }
+
+on_error() {
+  local status=$1 line=$2
+  printf '[yocto-devkit] FAILED (exit %s) near line %s.\n' "$status" "$line" >&2
+  [[ -z "$LOG_FILE" ]] || printf '[yocto-devkit] Log: %s\n' "$LOG_FILE" >&2
+  exit "$status"
+}
+trap 'on_error "$?" "$LINENO"' ERR
+
+usage() {
+  cat <<'HELP'
+Yocto DevKit — reproducible Yocto 6.0 LTS development on Ubuntu 24.04
+
+Usage: ./bin/yocto-devkit <command> [options]
+
+Commands:
+  setup [--install-docker] [--yes]   Install/check Docker, build image, clone Yocto, configure
+  doctor                             Display host, Docker, KVM and workspace diagnostics
+  build [image]                      Build a Yocto image (default: core-image-minimal)
+  run [image]                        Run QEMU in a terminal (default: core-image-minimal)
+  shell                              Open an interactive Yocto-enabled container shell
+  bitbake <args...>                  Forward arguments to BitBake
+  logs                               Show the newest setup log path
+  help                               Show this help
+
+Environment:
+  YOCTO_DEVKIT_WORKSPACE             Persistent files (default: ~/yocto-devkit-workspace)
+  YOCTO_DEVKIT_IMAGE                 Local Docker image name
+
+Notes:
+  - Docker is required. --install-docker explicitly permits installation via apt.
+  - The Docker socket is root-equivalent. The script does NOT add users to docker group.
+  - Setup progress measures completed stages, not download/compilation percentage.
+  - QEMU uses KVM when accessible, otherwise software emulation.
+HELP
+}
+
+require_ubuntu() {
+  [[ "$(uname -s)" == Linux ]] || die 'Linux is required.'
+  [[ "$(uname -m)" == x86_64 ]] || die 'This starter targets x86_64 hosts; other architectures are not tested.'
+  [[ -r /etc/os-release ]] || die '/etc/os-release is missing.'
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || \
+    die 'This installer supports Ubuntu 24.04 LTS only.'
+  (( EUID != 0 )) || die 'Run as a normal user, not root. This CLI invokes sudo only when required.'
+}
+
+resource_report() {
+  local free_gb mem_gb cpu
+  free_gb="$(df -Pk "$WORKSPACE" | awk 'NR==2 {print int($4/1024/1024)}')"
+  mem_gb="$(awk '/MemTotal:/ {print int($2/1024/1024)}' /proc/meminfo)"
+  cpu="$(nproc)"
+  log "Available disk: ${free_gb} GiB | RAM: ${mem_gb} GiB | CPU threads: ${cpu}"
+  (( free_gb >= 70 )) || warn 'Less than 70 GiB free. Yocto image builds may exhaust disk space.'
+  (( mem_gb >= 16 )) || warn 'Less than 16 GiB RAM. Small builds might work but will be slow; close other applications.'
+  (( free_gb >= 20 )) || die 'At least 20 GiB of free space is required even to bootstrap safely.'
+}
+
+confirm() {
+  local prompt=$1
+  [[ "$AUTO_YES" == true ]] && return 0
+  [[ -t 0 ]] || die 'Interactive confirmation required. Re-run with --yes to authorize the operation.'
+  read -r -p "$prompt [y/N] " answer
+  [[ "${answer,,}" == y || "${answer,,}" == yes ]]
+}
+
+sudo_cmd() {
+  (( EUID == 0 )) && { "$@"; return; }
+  command -v sudo >/dev/null 2>&1 || die 'sudo is required to install Docker.'
+  sudo "$@"
+}
+
+install_docker() {
+  [[ "$ALLOW_DOCKER_INSTALL" == true ]] || die 'Docker is missing. Run: setup --install-docker'
+  confirm 'Install the Ubuntu docker.io package and start its service?' || die 'Docker installation was declined.'
+  sudo_cmd apt-get update
+  sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo_cmd systemctl enable --now docker
+  fi
+}
+
+resolve_docker() {
+  if ! command -v docker >/dev/null 2>&1; then install_docker; fi
+  if docker info >/dev/null 2>&1; then
+    DOCKER=(docker)
+  elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
+  elif [[ -t 0 ]] && command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+  else
+    die 'Docker daemon cannot be reached. Start it (sudo systemctl start docker), then retry.'
+  fi
+  log "Docker accessible using: ${DOCKER[*]}"
+}
+
+progress() {
+  local pct=$1 label=$2 count=$((pct / 5)) bar='' i
+  for ((i=0;i<20;i++)); do
+    if (( i < count )); then bar+='='; else bar+='.'; fi
+  done
+  printf '\n[%s] %3d%%  %s\n' "$bar" "$pct" "$label"
+}
+
+start_log() {
+  mkdir -p "$WORKSPACE/logs"
+  LOG_FILE="$WORKSPACE/logs/$(date -u +%Y%m%dT%H%M%SZ)-setup.log"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  log "Session log: $LOG_FILE"
+}
+
+image_exists() { "${DOCKER[@]}" image inspect "$IMAGE" >/dev/null 2>&1; }
+
+build_container() {
+  local attempt
+  for attempt in 1 2; do
+    if "${DOCKER[@]}" build --progress=plain \
+      --build-arg "HOST_UID=$(id -u)" --build-arg "HOST_GID=$(id -g)" \
+      -f "$ROOT_DIR/docker/Dockerfile" -t "$IMAGE" "$ROOT_DIR"; then
+      return 0
+    fi
+    (( attempt == 2 )) && break
+    warn 'Docker build failed; retrying once (package mirrors or transient network issue).'
+    sleep 3
+  done
+  die 'Docker image build failed after two attempts. See the session log.'
+}
+
+container() {
+  local mode=$1; shift
+  local args=(run --rm --init --user "$(id -u):$(id -g)" \
+    --workdir /workspace --env HOME=/workspace/home \
+    --env LANG=en_US.UTF-8 --env LC_ALL=en_US.UTF-8 \
+    --mount "type=bind,source=$WORKSPACE,target=/workspace" \
+    --mount "type=bind,source=$ROOT_DIR/layers/meta-devkit,target=/opt/devkit/meta-devkit,readonly" \
+    --security-opt no-new-privileges --cap-drop ALL)
+  if [[ "$mode" == interactive ]]; then args+=(-it); fi
+  if [[ "$mode" == qemu && -r /dev/kvm && -w /dev/kvm ]]; then
+    args+=(--device /dev/kvm --group-add "$(stat -c %g /dev/kvm)")
+    log 'KVM acceleration enabled.'
+  elif [[ "$mode" == qemu ]]; then
+    warn 'KVM is unavailable to this account; using slower QEMU software emulation.'
+  fi
+  "${DOCKER[@]}" "${args[@]}" "$IMAGE" bash /opt/devkit/container-init.sh "$@"
+}
+
+validate_image_name() {
+  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._+-]*$ ]] || die "Invalid image target: $1"
+}
+
+require_ready() {
+  [[ -f "$WORKSPACE/build/conf/local.conf" ]] || die 'Workspace not initialized. Run setup first.'
+  resolve_docker
+  image_exists || die 'Docker image missing. Run setup first.'
+}
+
+setup() {
+  while (( $# )); do
+    case "$1" in
+      --yes) AUTO_YES=true ;;
+      --install-docker) ALLOW_DOCKER_INSTALL=true ;;
+      *) die "Unknown setup argument: $1" ;;
+    esac
+    shift
+  done
+  start_log
+  progress 0 'Starting preflight checks'
+  require_ubuntu
+  progress 10 'Ubuntu 24.04 verified'
+  mkdir -p "$WORKSPACE"/{home,cache/downloads,cache/sstate,logs,sources/layers,build}
+  resource_report
+  progress 20 'Workspace and resources checked'
+  resolve_docker
+  progress 35 'Docker engine available'
+  if ! image_exists; then build_container; else log 'Docker image already exists: skipping rebuild.'; fi
+  progress 60 'Development container ready'
+  container batch fetch
+  progress 80 'Upstream Yocto repositories ready'
+  container batch configure
+  progress 95 'Build configuration generated'
+  container batch verify
+  progress 100 'Setup completed successfully'
+  log 'Next: ./bin/yocto-devkit build'
+  log 'Then: ./bin/yocto-devkit run'
+}
+
+doctor() {
+  printf '%s\n' 'Yocto DevKit diagnostics'
+  require_ubuntu
+  mkdir -p "$WORKSPACE"
+  resource_report
+  log "Workspace: $WORKSPACE"
+  if [[ -e /dev/kvm ]]; then ls -l /dev/kvm; else warn '/dev/kvm missing. QEMU software emulation is available.'; fi
+  if command -v docker >/dev/null 2>&1; then
+    log "Docker client: $(docker --version)"
+    if docker info >/dev/null 2>&1; then
+      log 'Docker daemon accessible without sudo.'
+    elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+      log 'Docker daemon accessible with passwordless sudo.'
+    else
+      warn 'Docker daemon is not currently accessible without interaction.'
+    fi
+  else warn 'Docker is not installed.'; fi
+  [[ -f "$WORKSPACE/build/conf/local.conf" ]] && log 'Yocto configuration detected.' || warn 'Yocto workspace not initialized.'
+  log 'Diagnostics complete.'
+}
+
+main() {
+  local command=${1:-help}; (( $# == 0 )) || shift
+  case "$command" in
+    setup) setup "$@" ;;
+    doctor) doctor "$@" ;;
+    build|run)
+      (( $# <= 1 )) || die "Usage: $SCRIPT_NAME $command [image]"
+      local target=${1:-core-image-minimal}
+      validate_image_name "$target"; require_ready
+      if [[ "$command" == run ]]; then
+        [[ -t 0 && -t 1 ]] || die 'QEMU requires an interactive terminal.'
+        container qemu run "$target"
+      else container batch build "$target"; fi
+      ;;
+    shell)
+      (( $# == 0 )) || die 'Usage: shell'
+      [[ -t 0 && -t 1 ]] || die 'shell requires a terminal.'
+      require_ready; container interactive shell
+      ;;
+    bitbake)
+      (( $# > 0 )) || die 'Specify BitBake arguments.'
+      require_ready; container batch bitbake "$@"
+      ;;
+    logs)
+      [[ -d "$WORKSPACE/logs" ]] || die 'No logs yet.'
+      find "$WORKSPACE/logs" -maxdepth 1 -type f -name '*-setup.log' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-
+      ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; die "Unknown command: $command" ;;
+  esac
+}
+main "$@"

@@ -1,0 +1,19 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install linters and compilers
+        run: sudo apt-get update && sudo apt-get install -y shellcheck g++
+      - name: Run tests
+        run: bash tests/test_cli.sh

@@ -1,0 +1,8 @@
+# Workspace lives outside this source checkout by default.
+workspace/
+*.log
+*.swp
+.idea/
+.vscode/
+.DS_Store
+__pycache__/
