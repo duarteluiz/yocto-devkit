@@ -14,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install linters and compilers
-        run: sudo apt-get update && sudo apt-get install -y shellcheck g++
+        run: sudo apt-get update && sudo apt-get install -y shellcheck g++ cmake ninja-build catch2 libfmt-dev libspdlog-dev
       - name: Run tests
         run: bash tests/test_cli.sh
 
@@ -38,10 +38,23 @@ jobs:
               getent passwd "$(id -u)"
               git --version
               g++ --version
+              gdb --version
+              clang++ --version
+              cppcheck --version
+              test -f /usr/include/catch2/catch_test_macros.hpp
               python3 -c "import git, jinja2, pexpect, websockets"
               locale -a | grep -i en_US.utf8
               bash /opt/devkit/container-init.sh help
             '
+      - name: Run native Catch2 integration tests in Docker
+        run: |
+          mkdir -p "$RUNNER_TEMP/yocto-devkit-ci"/{cpp-build,home}
+          docker run --rm --init --user "$(id -u):$(id -g)" \
+            --env HOME=/workspace/home \
+            --mount "type=bind,source=$RUNNER_TEMP/yocto-devkit-ci,target=/workspace" \
+            --mount "type=bind,source=$PWD/layers/meta-devkit,target=/opt/devkit/meta-devkit,readonly" \
+            --workdir /workspace --security-opt no-new-privileges --cap-drop ALL \
+            yocto-devkit:smoke bash /opt/devkit/container-init.sh cpp-test
       - name: Bootstrap Yocto sources and validate recipes
         run: |
           mkdir -p "$RUNNER_TEMP/yocto-devkit-ci"/{sources/layers,build,cache/downloads,cache/sstate,home}
