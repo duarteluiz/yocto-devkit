@@ -42,3 +42,17 @@ jobs:
               locale -a | grep -i en_US.utf8
               bash /opt/devkit/container-init.sh help
             '
+      - name: Bootstrap Yocto sources and validate recipes
+        run: |
+          mkdir -p "$RUNNER_TEMP/yocto-devkit-ci"/{sources/layers,build,cache/downloads,cache/sstate,home}
+          for step in fetch configure verify; do
+            docker run --rm --init --user "$(id -u):$(id -g)" \
+              --env HOME=/workspace/home \
+              --env LANG=en_US.UTF-8 \
+              --env LC_ALL=en_US.UTF-8 \
+              --mount "type=bind,source=$RUNNER_TEMP/yocto-devkit-ci,target=/workspace" \
+              --mount "type=bind,source=$PWD/layers/meta-devkit,target=/opt/devkit/meta-devkit,readonly" \
+              --workdir /workspace \
+              --security-opt no-new-privileges --cap-drop ALL \
+              yocto-devkit:smoke bash /opt/devkit/container-init.sh "$step"
+          done
