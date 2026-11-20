@@ -65,6 +65,15 @@ append_managed_config() {
   fi
   cpu="$(nproc)"
   mem="$(awk '/MemTotal:/ {print int($2/1024/1024)}' /proc/meminfo)"
+  # Prefer the Docker cgroup memory limit when one is configured.
+  local limit_bytes
+  if [[ -r /sys/fs/cgroup/memory.max ]]; then
+    read -r limit_bytes </sys/fs/cgroup/memory.max
+    if [[ "$limit_bytes" =~ ^[0-9]+$ ]]; then
+      local limit_gib=$((limit_bytes / 1024 / 1024 / 1024))
+      (( limit_gib < mem )) && mem=$limit_gib
+    fi
+  fi
   threads=$((mem / 3))
   (( threads >= 1 )) || threads=1
   (( threads <= cpu )) || threads=$cpu

@@ -17,6 +17,15 @@ grep -q 'setup' "$TEMP_DIR/help.txt"
 grep -q 'bitbake' "$TEMP_DIR/help.txt"
 grep -q 'debug enable' "$TEMP_DIR/help.txt"
 grep -q 'cpp-test' "$TEMP_DIR/help.txt"
+grep -q 'safety-check' "$TEMP_DIR/help.txt"
+
+check 'Rejecting unsafe workspace paths'
+for unsafe in / /boot /etc /tmp/../boot; do
+  if YOCTO_DEVKIT_WORKSPACE="$unsafe" "$ROOT/bin/yocto-devkit" safety-check >"$TEMP_DIR/unsafe.log" 2>&1; then
+    printf 'Unsafe workspace accepted: %s\n' "$unsafe" >&2
+    exit 1
+  fi
+done
 
 check 'Checking unknown command rejection'
 if "$ROOT/bin/yocto-devkit" does-not-exist >"$TEMP_DIR/invalid.log" 2>&1; then
