@@ -44,32 +44,32 @@ set -euo pipefail
 case "${1:-}" in
   info) exit 0 ;;
   image) [[ "${2:-}" == inspect ]] ;;
-  run) printf '%s\\n' "$@" > "${MOCK_DOCKER_ARGS:?}" ;;
+  run) printf '%s\n' "$@" > "${MOCK_DOCKER_ARGS:?}" ;;
   *) exit 1 ;;
 esac
 MOCK_DOCKER
 chmod +x "$TEMP_DIR/mock-bin/docker"
 if ! command -v script >/dev/null 2>&1; then
-  printf 'script(1) is required for pseudo-terminal regression tests\\n' >&2
+  printf 'script(1) is required for pseudo-terminal regression tests\n' >&2
   exit 1
 fi
-env PATH="$TEMP_DIR/mock-bin:$PATH" \\
-  YOCTO_DEVKIT_WORKSPACE="$TEMP_DIR/workspace" \\
-  MOCK_DOCKER_ARGS="$TEMP_DIR/docker-args" \\
+env PATH="$TEMP_DIR/mock-bin:$PATH" \
+  YOCTO_DEVKIT_WORKSPACE="$TEMP_DIR/workspace" \
+  MOCK_DOCKER_ARGS="$TEMP_DIR/docker-args" \
   script -q -e -c "$ROOT/bin/yocto-devkit run" /dev/null >"$TEMP_DIR/qemu-run.log" 2>&1
 grep -Fxq -- '-it' "$TEMP_DIR/docker-args" || {
-  printf 'QEMU Docker invocation omitted -it\\n' >&2
+  printf 'QEMU Docker invocation omitted -it\n' >&2
   exit 1
 }
 grep -Fxq -- 'run' "$TEMP_DIR/docker-args"
 
 check 'Checking non-interactive actions do not allocate a TTY'
-env PATH="$TEMP_DIR/mock-bin:$PATH" \\
-  YOCTO_DEVKIT_WORKSPACE="$TEMP_DIR/workspace" \\
-  MOCK_DOCKER_ARGS="$TEMP_DIR/docker-args" \\
+env PATH="$TEMP_DIR/mock-bin:$PATH" \
+  YOCTO_DEVKIT_WORKSPACE="$TEMP_DIR/workspace" \
+  MOCK_DOCKER_ARGS="$TEMP_DIR/docker-args" \
   "$ROOT/bin/yocto-devkit" debug status >"$TEMP_DIR/debug-status.log" 2>&1
 if grep -Fxq -- '-it' "$TEMP_DIR/docker-args"; then
-  printf 'Non-interactive Docker invocation incorrectly uses -it\\n' >&2
+  printf 'Non-interactive Docker invocation incorrectly uses -it\n' >&2
   exit 1
 fi
 
